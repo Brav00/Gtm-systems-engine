@@ -1,0 +1,20 @@
+{
+  "healthy-outreach.com": {
+    "mx_present": true,
+    "spf_present": true,
+    "spf_valid_syntax": true,
+    "dkim_selector_found": true,
+    "dmarc_present": true,
+    "dmarc_policy": "quarantine",
+    "tracking_cname_valid": true
+  },
+  "broken-sender.com": {
+    "mx_present": true,
+    "spf_present": true,
+    "spf_valid_syntax": false,
+    "dkim_selector_found": false,
+    "dmarc_present": false,
+    "dmarc_policy": "missing",
+    "tracking_cname_valid": false
+  }
+}
