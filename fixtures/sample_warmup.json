@@ -1,0 +1,17 @@
+{
+  "healthy-outreach.com": {
+    "warmup_score": 94,
+    "bounce_rate_pct": 0.6,
+    "daily_send_limit": 35
+  },
+  "throttled-sender.com": {
+    "warmup_score": 76,
+    "bounce_rate_pct": 1.8,
+    "daily_send_limit": 30
+  },
+  "quarantined-sender.com": {
+    "warmup_score": 52,
+    "bounce_rate_pct": 4.5,
+    "daily_send_limit": 25
+  }
+}
