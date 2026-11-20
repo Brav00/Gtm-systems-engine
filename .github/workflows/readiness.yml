@@ -1,0 +1,69 @@
+name: GTM Readiness CI & Runner
+
+on:
+  push:
+    branches: ["main", "feat/**"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+    inputs:
+      domains:
+        description: "Comma-separated domains to check"
+        required: true
+        default: "healthy-outreach.com,throttled-sender.com,quarantined-sender.com"
+      dns_mode:
+        description: "DNS check mode: mock or live"
+        required: true
+        default: "mock"
+      selector:
+        description: "DKIM selector"
+        required: false
+        default: "google"
+      tracking_host:
+        description: "Tracking subdomain"
+        required: false
+        default: "mail"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install package and dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run pytest test suite
+        run: pytest -v
+
+      - name: Run combined readiness check (manual or scheduled)
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        run: |
+          DOMAINS="${{ github.event.inputs.domains || 'healthy-outreach.com,throttled-sender.com,quarantined-sender.com' }}"
+          DNS_MODE="${{ github.event.inputs.dns_mode || 'mock' }}"
+          SELECTOR="${{ github.event.inputs.selector || 'google' }}"
+          TRACKING_HOST="${{ github.event.inputs.tracking_host || 'mail' }}"
+
+          python -m gtm_engine.cli.check_readiness \
+            --domains "$DOMAINS" \
+            --dns-mode "$DNS_MODE" \
+            --selector "$SELECTOR" \
+            --tracking-host "$TRACKING_HOST"
