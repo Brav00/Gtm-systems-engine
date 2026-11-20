@@ -18,8 +18,6 @@ def run_readiness_check(
     warmup_monitor: WarmupMonitorPort,
     selector: str = "google",
     tracking_host: str = "mail",
-    notifier: ReadinessNotifierPort | None = None,
-    only_blocked: bool = False,
 ) -> ReadinessBatchReport:
     decisions: list[DomainReadinessDecision] = []
 
@@ -60,7 +58,7 @@ def run_readiness_check(
     blocked_count = len(decisions) - ready_count
     total_capacity = sum(d.effective_daily_cap for d in decisions)
 
-    report = ReadinessBatchReport(
+    return ReadinessBatchReport(
         total_domains=len(decisions),
         ready_count=ready_count,
         blocked_count=blocked_count,
@@ -68,10 +66,20 @@ def run_readiness_check(
         decisions=decisions,
     )
 
-    if notifier is not None and (not only_blocked or report.blocked_count > 0):
-        notifier.notify_readiness(report)
 
-    return report
+def dispatch_readiness_notification(
+    report: ReadinessBatchReport,
+    notifier: ReadinessNotifierPort,
+    only_blocked: bool = False,
+) -> bool:
+    """Send the report via the notifier unless only_blocked is set and nothing is blocked.
+
+    Returns True if the notifier was called.
+    """
+    if only_blocked and report.blocked_count == 0:
+        return False
+    notifier.notify_readiness(report)
+    return True
 
 
 def main() -> int:
@@ -113,10 +121,15 @@ def main() -> int:
         warmup_monitor=warmup_monitor,
         selector=args.selector,
         tracking_host=args.tracking_host,
-        notifier=notifier,
-        only_blocked=args.only_blocked,
     )
-    print(report.model_dump_json(indent=2))
+    # Print first so the JSON report is always in the logs, even if webhook delivery fails.
+    print(report.model_dump_json(indent=2), flush=True)
+
+    try:
+        dispatch_readiness_notification(report, notifier, only_blocked=args.only_blocked)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     if args.strict and report.blocked_count > 0:
         return 1

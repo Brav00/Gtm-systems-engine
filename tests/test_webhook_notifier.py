@@ -1,4 +1,6 @@
 import json
+import sys
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -7,7 +9,7 @@ import pytest
 from gtm_engine.adapters.http_webhook_notifier import HttpWebhookReadinessNotifier
 from gtm_engine.adapters.mock_dns import MockDeliverabilityAdapter
 from gtm_engine.adapters.mock_warmup import MockWarmupMonitorAdapter
-from gtm_engine.cli.check_readiness import run_readiness_check
+from gtm_engine.cli.check_readiness import dispatch_readiness_notification, main, run_readiness_check
 
 ROOT = Path(__file__).resolve().parent.parent
 WEBHOOK_URL = "https://hooks.example.test/readiness"
@@ -65,58 +67,69 @@ def test_http_webhook_notifier_rejects_empty_url() -> None:
 
 
 @patch("urllib.request.urlopen")
-def test_run_readiness_check_notifies_when_only_blocked_false(mock_urlopen: MagicMock) -> None:
+def test_dispatch_notifies_when_only_blocked_false(mock_urlopen: MagicMock) -> None:
     _mock_ok_response(mock_urlopen)
     dns, warmup = _adapters()
+    report = run_readiness_check(domains=["healthy-outreach.com"], dns_auditor=dns, warmup_monitor=warmup)
 
-    report = run_readiness_check(
-        domains=["healthy-outreach.com"],
-        dns_auditor=dns,
-        warmup_monitor=warmup,
-        notifier=HttpWebhookReadinessNotifier(WEBHOOK_URL),
-        only_blocked=False,
-    )
+    sent = dispatch_readiness_notification(report, HttpWebhookReadinessNotifier(WEBHOOK_URL), only_blocked=False)
 
     assert report.blocked_count == 0
+    assert sent is True
     mock_urlopen.assert_called_once()
 
 
 @patch("urllib.request.urlopen")
-def test_run_readiness_check_skips_notify_when_only_blocked_and_nothing_blocked(
-    mock_urlopen: MagicMock,
-) -> None:
+def test_dispatch_skips_notify_when_only_blocked_and_nothing_blocked(mock_urlopen: MagicMock) -> None:
     _mock_ok_response(mock_urlopen)
     dns, warmup = _adapters()
+    report = run_readiness_check(domains=["healthy-outreach.com"], dns_auditor=dns, warmup_monitor=warmup)
     notifier = HttpWebhookReadinessNotifier(WEBHOOK_URL)
 
     with patch.object(notifier, "notify_readiness", wraps=notifier.notify_readiness) as spy:
-        report = run_readiness_check(
-            domains=["healthy-outreach.com"],
-            dns_auditor=dns,
-            warmup_monitor=warmup,
-            notifier=notifier,
-            only_blocked=True,
-        )
+        sent = dispatch_readiness_notification(report, notifier, only_blocked=True)
 
     assert report.blocked_count == 0
+    assert sent is False
     spy.assert_not_called()
     mock_urlopen.assert_not_called()
 
 
 @patch("urllib.request.urlopen")
-def test_run_readiness_check_notifies_when_only_blocked_and_something_blocked(
-    mock_urlopen: MagicMock,
-) -> None:
+def test_dispatch_notifies_when_only_blocked_and_something_blocked(mock_urlopen: MagicMock) -> None:
     _mock_ok_response(mock_urlopen)
     dns, warmup = _adapters()
-
     report = run_readiness_check(
         domains=["healthy-outreach.com", "quarantined-sender.com"],
         dns_auditor=dns,
         warmup_monitor=warmup,
-        notifier=HttpWebhookReadinessNotifier(WEBHOOK_URL),
-        only_blocked=True,
     )
 
+    sent = dispatch_readiness_notification(report, HttpWebhookReadinessNotifier(WEBHOOK_URL), only_blocked=True)
+
     assert report.blocked_count == 1
+    assert sent is True
+    mock_urlopen.assert_called_once()
+
+
+@patch("urllib.request.urlopen")
+def test_main_prints_report_before_webhook_failure(
+    mock_urlopen: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    mock_urlopen.side_effect = urllib.error.URLError("connection refused")
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["check_readiness", "--domains", "healthy-outreach.com", "--webhook-url", WEBHOOK_URL],
+    )
+
+    exit_code = main()
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert json.loads(captured.out)["total_domains"] == 1
+    assert "Failed to deliver readiness webhook" in captured.err
     mock_urlopen.assert_called_once()
