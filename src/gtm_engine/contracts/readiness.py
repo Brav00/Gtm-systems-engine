@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
-from gtm_engine.contracts.deliverability import DomainDeliverabilityReport
+from gtm_engine.contracts.deliverability import DomainAuditResult
 from gtm_engine.contracts.warmup import DomainWarmupEvaluation, RotationStatus
 
 
@@ -11,7 +11,7 @@ class DomainReadinessDecision(BaseModel):
     rotation_status: RotationStatus
     effective_daily_cap: int = Field(ge=0)
     blocking_reasons: list[str] = Field(default_factory=list)
-    dns_report: DomainDeliverabilityReport
+    dns_report: DomainAuditResult
     warmup_report: DomainWarmupEvaluation
 
 
