@@ -56,6 +56,8 @@ jobs:
 
       - name: Run combined readiness check (manual or scheduled)
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        env:
+          READINESS_WEBHOOK_URL: ${{ secrets.READINESS_WEBHOOK_URL }}
         run: |
           DOMAINS="${{ github.event.inputs.domains || 'healthy-outreach.com,throttled-sender.com,quarantined-sender.com' }}"
           DNS_MODE="${{ github.event.inputs.dns_mode || 'mock' }}"

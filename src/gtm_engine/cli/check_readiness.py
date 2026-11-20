@@ -1,10 +1,14 @@
 import argparse
+import os
 import sys
 from gtm_engine.adapters.dns_live import LiveDnsDeliverabilityAdapter
+from gtm_engine.adapters.http_webhook_notifier import HttpWebhookReadinessNotifier
 from gtm_engine.adapters.mock_dns import MockDeliverabilityAdapter
 from gtm_engine.adapters.mock_warmup import MockWarmupMonitorAdapter
+from gtm_engine.adapters.noop_notifier import NoopReadinessNotifier
 from gtm_engine.contracts.readiness import DomainReadinessDecision, ReadinessBatchReport
 from gtm_engine.ports.deliverability import DeliverabilityAuditorPort
+from gtm_engine.ports.notifications import ReadinessNotifierPort
 from gtm_engine.ports.warmup import WarmupMonitorPort
 
 
@@ -63,6 +67,21 @@ def run_readiness_check(
     )
 
 
+def dispatch_readiness_notification(
+    report: ReadinessBatchReport,
+    notifier: ReadinessNotifierPort,
+    only_blocked: bool = False,
+) -> bool:
+    """Send the report via the notifier unless only_blocked is set and nothing is blocked.
+
+    Returns True if the notifier was called.
+    """
+    if only_blocked and report.blocked_count == 0:
+        return False
+    notifier.notify_readiness(report)
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Combined DNS + Warm-Up pre-flight readiness gate.")
     parser.add_argument("--domains", required=True, help="Comma-separated list of sending domains.")
@@ -72,6 +91,16 @@ def main() -> int:
     parser.add_argument("--selector", default="google", help="DKIM selector.")
     parser.add_argument("--tracking-host", default="mail", help="Tracking subdomain.")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero if any domain is blocked.")
+    parser.add_argument(
+        "--webhook-url",
+        default=os.environ.get("READINESS_WEBHOOK_URL", ""),
+        help="Webhook URL to POST the readiness report to (default: $READINESS_WEBHOOK_URL).",
+    )
+    parser.add_argument(
+        "--only-blocked",
+        action="store_true",
+        help="Only send the webhook when at least one domain is blocked.",
+    )
     args = parser.parse_args()
 
     domain_list = [d.strip() for d in args.domains.split(",") if d.strip()]
@@ -82,6 +111,9 @@ def main() -> int:
         else MockDeliverabilityAdapter(args.dns_fixture)
     )
     warmup_monitor: WarmupMonitorPort = MockWarmupMonitorAdapter(args.warmup_fixture)
+    notifier: ReadinessNotifierPort = (
+        HttpWebhookReadinessNotifier(args.webhook_url) if args.webhook_url.strip() else NoopReadinessNotifier()
+    )
 
     report = run_readiness_check(
         domains=domain_list,
@@ -90,7 +122,14 @@ def main() -> int:
         selector=args.selector,
         tracking_host=args.tracking_host,
     )
-    print(report.model_dump_json(indent=2))
+    # Print first so the JSON report is always in the logs, even if webhook delivery fails.
+    print(report.model_dump_json(indent=2), flush=True)
+
+    try:
+        dispatch_readiness_notification(report, notifier, only_blocked=args.only_blocked)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     if args.strict and report.blocked_count > 0:
         return 1
