@@ -79,15 +79,59 @@ A domain's warm-up health is judged by its **weakest mailbox**: the lowest reput
 
 **Exit codes:** `0` the run completed · `1` `--strict` and at least one domain is blocked · `2` an error (Smartlead API or webhook failure; the key is never printed).
 
+## Day 2: Lead verification waterfall
+
+Verifies lead emails before they enter a sequence. Clear answers stop at the first provider; only unsure results pay for a second opinion.
+
+```mermaid
+flowchart LR
+    L["Raw leads<br/>--leads-file leads.json<br/>email trimmed + lowercased"] --> S{"Syntax check<br/>free, local"}
+    S -->|"malformed"| X
+    S -->|"looks like an email"| P1["Provider 1 (primary)<br/>MillionVerifier · mock_primary"]
+    P1 -->|"valid / invalid:<br/>stop, save credits"| SPLIT{"Valid / Risky / Invalid split"}
+    P1 -->|"risky / unknown"| P2["Conditional fallback<br/>Provider 2"]
+    P2 --> SPLIT
+    SPLIT --> V["🟢 Valid<br/>deliverable"]
+    SPLIT --> R["🟡 Risky / Unknown<br/>hold back"]
+    SPLIT --> X["🔴 Invalid<br/>suppress"]
+    V --> J["JSON VerificationBatchReport"]
+    R --> J
+    X --> J
+    J --> W["Webhook<br/>Slack / n8n / Clay"]
+    J --> E["Exit codes<br/>0 ok · 1 strict · 2 error"]
+```
+
+| Area | Rule |
+|---|---|
+| **Syntax check** | Not shaped like `name@domain.tld` → `invalid` with `attempts: 0`; no provider is called |
+| **Stop rule** | `valid` or `invalid` from any provider ends the waterfall |
+| **Fallback rule** | `risky` or `unknown` escalates to the next provider; a provider error counts as `unknown` |
+| **Tie-break** | A later `unknown` never overrides an earlier `risky` |
+| **MillionVerifier mapping** | `ok` → valid · `catch_all`, `unknown` → risky · `invalid`, `disposable` → invalid · anything else → unknown |
+| **Deliverable** | `true` only when the final status is `valid` |
+| **Duplicates** | The same email appears once per lead in `results`, but is verified only once per batch |
+| **Strict mode** | `--strict` exits `1` if any lead is risky, invalid or unknown |
+| **Circuit breaker: auth** | A `401` / `403`, or a MillionVerifier account error (bad key, no credits), aborts the whole run immediately with exit `2` |
+| **Circuit breaker: outage** | 3 provider errors in a row (network, timeout, 5xx) abort the run with exit `2`; any successful call resets the count |
+| **Lead context** | Each result keeps the lead's `first_name`, `last_name` and `company_domain`; `deliverable_leads` is an upload-ready list of valid leads |
+
+| Run | Command |
+|---|---|
+| **Sample data** | `python -m gtm_engine.cli.verify_leads --leads-file fixtures/sample_leads.json` |
+| **Live (MillionVerifier)** | `VERIFIER_API_KEY=… python -m gtm_engine.cli.verify_leads --leads-file leads.json --mode live --strict` |
+| **Send to a webhook** | Add `--webhook-url <url>` (or set `VERIFICATION_WEBHOOK_URL`) |
+
+Leads file format: a JSON list of objects with `email` (required) and optional `first_name`, `last_name`, `company_domain`.
+
 ## Layout
 
 ```text
 src/gtm_engine/
-  contracts/   Pydantic JSON contracts (deliverability, warmup, readiness)
+  contracts/   Pydantic JSON contracts (deliverability, warmup, readiness, leads)
   ports/       Protocol interfaces the core depends on
-  adapters/    Vendor/data-source implementations (mock + live DNS, mock + Smartlead warm-up, webhook)
-  cli/         audit_domains, evaluate_warmup, check_readiness
-fixtures/      Sample DNS and warm-up data for mock mode
+  adapters/    Vendor/data-source implementations (DNS, warm-up, email verification, webhook)
+  cli/         audit_domains, evaluate_warmup, check_readiness, verify_leads
+fixtures/      Sample DNS, warm-up and lead data for mock mode
 tests/         pytest suite (all network calls mocked)
 ```
 
