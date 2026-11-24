@@ -26,6 +26,10 @@ def _as_int(value: Any) -> int:
 
 
 class SmartleadWarmupAdapter:
+    PAGE_SIZE = 100
+    # Safety stop (50,000 accounts) in case the API ignores offset and keeps returning full pages.
+    MAX_PAGES = 500
+
     def __init__(
         self,
         api_key: str,
@@ -39,11 +43,9 @@ class SmartleadWarmupAdapter:
         self.timeout_seconds = timeout_seconds
         self._accounts_cache: list[dict] | None = None
 
-    def _fetch_accounts(self) -> list[dict]:
-        if self._accounts_cache is not None:
-            return self._accounts_cache
-
-        url = f"{self.base_url}/email-accounts?{urllib.parse.urlencode({'api_key': self.api_key})}"
+    def _fetch_page(self, offset: int, limit: int) -> list[dict]:
+        query = urllib.parse.urlencode({"api_key": self.api_key, "offset": offset, "limit": limit})
+        url = f"{self.base_url}/email-accounts?{query}"
         req = urllib.request.Request(url=url, headers={"Accept": "application/json"}, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
@@ -56,9 +58,32 @@ class SmartleadWarmupAdapter:
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Failed to reach Smartlead API: {exc.reason}") from None
 
+        # Accept a bare JSON list or a dict wrapper around the list.
         if isinstance(data, dict):
             data = data.get("data", data.get("email_accounts", []))
-        self._accounts_cache = [acc for acc in data if isinstance(acc, dict)] if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        return [acc for acc in data if isinstance(acc, dict)]
+
+    def _fetch_accounts(self) -> list[dict]:
+        if self._accounts_cache is not None:
+            return self._accounts_cache
+
+        accounts: list[dict] = []
+        offset = 0
+        for _ in range(self.MAX_PAGES):
+            page = self._fetch_page(offset=offset, limit=self.PAGE_SIZE)
+            accounts.extend(page)
+            if len(page) < self.PAGE_SIZE:
+                break
+            offset += self.PAGE_SIZE
+        else:
+            # Fail loudly rather than return a truncated list that would falsely quarantine domains.
+            raise RuntimeError(
+                f"Smartlead API pagination exceeded {self.MAX_PAGES} pages of {self.PAGE_SIZE} accounts"
+            )
+
+        self._accounts_cache = accounts
         return self._accounts_cache
 
     def evaluate_domain(self, domain: str) -> DomainWarmupEvaluation:

@@ -1,5 +1,6 @@
 import json
 import urllib.error
+import urllib.parse
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -150,3 +151,60 @@ def test_api_errors_do_not_leak_api_key(mock_urlopen: MagicMock) -> None:
 def test_blank_api_key_is_rejected() -> None:
     with pytest.raises(ValueError):
         SmartleadWarmupAdapter("   ")
+
+
+def _response(payload: Any, status: int = 200) -> MagicMock:
+    cm = MagicMock()
+    resp = cm.__enter__.return_value
+    resp.status = status
+    resp.read.return_value = json.dumps(payload).encode("utf-8")
+    return cm
+
+
+def _query(req: Any) -> dict[str, list[str]]:
+    return urllib.parse.parse_qs(urllib.parse.urlsplit(req.full_url).query)
+
+
+@patch("urllib.request.urlopen")
+def test_fetch_accounts_paginates_and_finds_domain_on_page_2(mock_urlopen: MagicMock) -> None:
+    page_1 = [_account(f"user{i}@agency-client-a.com") for i in range(100)]
+    page_2 = [_account("late@page-two.com", reputation=92)]
+    mock_urlopen.side_effect = [_response(page_1), _response(page_2)]
+    adapter = SmartleadWarmupAdapter(FAKE_API_KEY)
+
+    accounts = adapter._fetch_accounts()
+
+    assert mock_urlopen.call_count == 2
+    assert len(accounts) == 101
+    assert [_query(c.args[0])["offset"] for c in mock_urlopen.call_args_list] == [["0"], ["100"]]
+    assert all(_query(c.args[0])["limit"] == ["100"] for c in mock_urlopen.call_args_list)
+
+    result = adapter.evaluate_domain("page-two.com")
+    assert result.rotation_status == "active"
+    assert result.gate_passed is True
+    assert result.reasons == []
+    assert mock_urlopen.call_count == 2  # evaluate_domain reused the cached pages
+
+
+@patch("urllib.request.urlopen")
+def test_fetch_accounts_handles_dict_wrapper_and_stops_on_empty_page(mock_urlopen: MagicMock) -> None:
+    page_1 = {"data": [_account(f"u{i}@wrapped.com") for i in range(100)]}
+    mock_urlopen.side_effect = [_response(page_1), _response({"data": []})]
+
+    accounts = SmartleadWarmupAdapter(FAKE_API_KEY)._fetch_accounts()
+
+    assert mock_urlopen.call_count == 2
+    assert len(accounts) == 100
+
+
+@patch("urllib.request.urlopen")
+def test_fetch_accounts_raises_instead_of_truncating_when_pages_never_end(mock_urlopen: MagicMock) -> None:
+    full_page = [_account(f"u{i}@loop.com") for i in range(100)]
+    mock_urlopen.side_effect = lambda *args, **kwargs: _response(full_page)
+    adapter = SmartleadWarmupAdapter(FAKE_API_KEY)
+    adapter.MAX_PAGES = 3
+
+    with pytest.raises(RuntimeError, match="pagination exceeded 3 pages"):
+        adapter._fetch_accounts()
+
+    assert mock_urlopen.call_count == 3
