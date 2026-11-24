@@ -9,9 +9,10 @@ import pytest
 
 from gtm_engine.adapters.millionverifier import LiveMillionVerifierAdapter
 from gtm_engine.adapters.mock_verifier import MockEmailVerifierAdapter
-from gtm_engine.adapters.waterfall_verifier import VerificationWaterfall
+from gtm_engine.adapters.waterfall_verifier import VerificationAbortedError, VerificationWaterfall
 from gtm_engine.cli.verify_leads import load_leads, main, run_verification
 from gtm_engine.contracts.leads import LeadInput, LeadVerificationResult, VerificationStatus
+from gtm_engine.ports.verifier import VerifierAuthError, VerifierError
 
 ROOT = Path(__file__).resolve().parent.parent
 SAMPLE_LEADS = ROOT / "fixtures" / "sample_leads.json"
@@ -322,3 +323,181 @@ def test_cli_prints_report_before_webhook_failure(
     captured = capsys.readouterr()
     assert json.loads(captured.out)["total_leads"] == 7
     assert "Failed to deliver verification webhook" in captured.err
+
+
+# --- 5. Circuit breaker: auth failures abort immediately, repeated errors abort after 3 ------
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        url=f"https://api.millionverifier.com/api/v3/?api={FAKE_API_KEY}&email=a@acme.com",
+        code=code,
+        msg="error",
+        hdrs=None,  # type: ignore[arg-type]
+        fp=None,
+    )
+
+
+def _leads(n: int) -> list[LeadInput]:
+    return [LeadInput(email=f"lead{i}@acme.com") for i in range(n)]
+
+
+class ScriptedVerifier:
+    """Returns or raises the next scripted outcome on each call."""
+
+    def __init__(self, provider_name: str, outcomes: list) -> None:
+        self.provider_name = provider_name
+        self.outcomes = list(outcomes)
+        self.calls = 0
+
+    def verify_email(self, email: str) -> tuple[VerificationStatus, list[str]]:
+        self.calls += 1
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome, [f"said_{outcome}"]
+
+
+@pytest.mark.parametrize("code", [401, 403])
+@patch("urllib.request.urlopen")
+def test_auth_failure_aborts_on_first_lead(mock_urlopen: MagicMock, code: int) -> None:
+    mock_urlopen.side_effect = _http_error(code)
+    waterfall = VerificationWaterfall([LiveMillionVerifierAdapter(FAKE_API_KEY)])
+
+    with pytest.raises(VerificationAbortedError) as exc_info:
+        run_verification(_leads(5000), waterfall)
+
+    message = str(exc_info.value)
+    assert mock_urlopen.call_count == 1  # stopped at lead 1, not 5,000
+    assert "authentication/account error" in message
+    assert f"status {code}" in message
+    assert "stopped at lead 1 of 5000" in message
+    assert FAKE_API_KEY not in message
+
+
+@patch("urllib.request.urlopen")
+def test_api_error_field_aborts_immediately(mock_urlopen: MagicMock) -> None:
+    mock_urlopen.return_value = _mv_response({"error": f"Insufficient credits for {FAKE_API_KEY}"})
+    waterfall = VerificationWaterfall([LiveMillionVerifierAdapter(FAKE_API_KEY)])
+
+    with pytest.raises(VerificationAbortedError) as exc_info:
+        run_verification(_leads(10), waterfall)
+
+    assert mock_urlopen.call_count == 1
+    assert "Insufficient credits for ***" in str(exc_info.value)
+    assert FAKE_API_KEY not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [urllib.error.URLError("connection refused"), TimeoutError("timed out"), _http_error(503)],
+    ids=["network", "timeout", "server_error"],
+)
+@patch("urllib.request.urlopen")
+def test_three_consecutive_errors_abort(mock_urlopen: MagicMock, failure: Exception) -> None:
+    mock_urlopen.side_effect = failure
+    waterfall = VerificationWaterfall([LiveMillionVerifierAdapter(FAKE_API_KEY)])
+
+    with pytest.raises(VerificationAbortedError) as exc_info:
+        run_verification(_leads(5000), waterfall)
+
+    message = str(exc_info.value)
+    assert mock_urlopen.call_count == 3
+    assert "millionverifier failed 3 times in a row" in message
+    assert "stopped at lead 3 of 5000" in message
+    assert FAKE_API_KEY not in message
+
+
+def test_millionverifier_timeout_is_a_clean_provider_error() -> None:
+    with patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+        with pytest.raises(VerifierError, match="timed out after 20 seconds") as exc_info:
+            LiveMillionVerifierAdapter(FAKE_API_KEY).verify_email("a@acme.com")
+    assert not isinstance(exc_info.value, VerifierAuthError)
+
+
+def test_success_resets_the_error_count() -> None:
+    flaky = VerifierError("blip")
+    provider = ScriptedVerifier("primary", [flaky, flaky, "valid", flaky, flaky, "valid"])
+    waterfall = VerificationWaterfall([provider])
+
+    report = run_verification(_leads(6), waterfall)
+
+    assert provider.calls == 6
+    assert report.valid_count == 2
+    assert report.unknown_count == 4
+
+
+def test_errors_on_primary_with_working_fallback_still_abort() -> None:
+    down = VerifierError("Failed to reach Primary API")
+    primary = ScriptedVerifier("primary", [down, down, down])
+    fallback = ScriptedVerifier("fallback", ["valid", "valid"])
+
+    with pytest.raises(VerificationAbortedError, match="primary failed 3 times in a row"):
+        run_verification(_leads(3), VerificationWaterfall([primary, fallback]))
+
+    assert fallback.calls == 2  # leads 1-2 fell back; lead 3 tripped the breaker
+
+
+@patch("urllib.request.urlopen")
+def test_cli_live_auth_failure_exits_2_without_report_or_webhook(
+    mock_urlopen: MagicMock, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mock_urlopen.side_effect = _http_error(401)
+
+    exit_code = _run_cli(
+        monkeypatch, "--mode", "live", "--verifier-api-key", FAKE_API_KEY, "--webhook-url", WEBHOOK_URL
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert "authentication/account error" in captured.err
+    assert FAKE_API_KEY not in captured.err
+    assert mock_urlopen.call_count == 1  # only the MillionVerifier call; the webhook was never posted
+
+
+# --- 6. Lead context carried onto results -------------------------------------------------
+
+
+def test_results_carry_lead_context_and_duplicates_keep_their_own() -> None:
+    primary = RecordingVerifier("primary", "valid")
+    leads = [
+        LeadInput(email="pat@acme.com", first_name="Pat", last_name="Lee", company_domain="ACME.com"),
+        LeadInput(email="PAT@acme.com", first_name="Patricia", last_name="Lee", company_domain="acme.com"),
+        LeadInput(email="no.name@acme.com"),
+    ]
+
+    report = run_verification(leads, VerificationWaterfall([primary]))
+
+    assert primary.calls == ["pat@acme.com", "no.name@acme.com"]  # duplicate still verified once
+    first, second, third = report.results
+    assert (first.first_name, first.last_name, first.company_domain) == ("Pat", "Lee", "acme.com")
+    assert second.first_name == "Patricia"
+    assert (third.first_name, third.last_name, third.company_domain) == (None, None, None)
+
+
+def test_verify_lead_copies_context() -> None:
+    waterfall = VerificationWaterfall([RecordingVerifier("primary", "risky")])
+
+    result = waterfall.verify_lead(LeadInput(email="ops@acme.com", first_name="Ops", company_domain="acme.com"))
+
+    assert result.email == "ops@acme.com"
+    assert result.first_name == "Ops"
+    assert result.company_domain == "acme.com"
+    assert result.status == "risky"
+    assert result.deliverable is False
+
+
+def test_deliverable_leads_are_upload_ready(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _run_cli(monkeypatch) == 0
+    report = json.loads(capsys.readouterr().out)
+
+    upload = report["deliverable_leads"]
+    assert [lead["email"] for lead in upload] == report["deliverable_emails"]
+    assert [(lead["first_name"], lead["last_name"], lead["company_domain"]) for lead in upload] == [
+        ("Jane", "Doe", "healthy-outreach.com"),
+        ("Sam", "Lee", "healthy-outreach.com"),
+    ]
+    assert all(lead["status"] == "valid" and lead["deliverable"] for lead in upload)

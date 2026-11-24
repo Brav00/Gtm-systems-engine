@@ -32,6 +32,9 @@ class LeadInput(BaseModel):
 
 class LeadVerificationResult(BaseModel):
     email: str
+    first_name: str | None = None
+    last_name: str | None = None
+    company_domain: str | None = None
     status: VerificationStatus
     deliverable: bool = False
     provider: str
@@ -51,4 +54,5 @@ class VerificationBatchReport(BaseModel):
     invalid_count: int
     unknown_count: int
     deliverable_emails: list[str]
+    deliverable_leads: list[LeadVerificationResult]
     results: list[LeadVerificationResult]

@@ -10,7 +10,11 @@ from gtm_engine.adapters.http_webhook_notifier import HttpWebhookReadinessNotifi
 from gtm_engine.adapters.millionverifier import LiveMillionVerifierAdapter
 from gtm_engine.adapters.mock_verifier import MockEmailVerifierAdapter
 from gtm_engine.adapters.noop_notifier import NoopReadinessNotifier
-from gtm_engine.adapters.waterfall_verifier import VerificationWaterfall
+from gtm_engine.adapters.waterfall_verifier import (
+    VerificationAbortedError,
+    VerificationWaterfall,
+    with_lead_context,
+)
 from gtm_engine.contracts.leads import LeadInput, LeadVerificationResult, VerificationBatchReport
 from gtm_engine.ports.notifications import VerificationNotifierPort
 from gtm_engine.ports.verifier import EmailVerifierPort
@@ -27,13 +31,26 @@ def load_leads(path: str | Path) -> list[LeadInput]:
 
 
 def run_verification(leads: list[LeadInput], waterfall: VerificationWaterfall) -> VerificationBatchReport:
-    # Duplicate emails in one batch are verified once, so they never spend credits twice.
+    # Duplicate emails in one batch are verified once, so they never spend credits twice;
+    # each lead still keeps its own name and company on its result row.
     cache: dict[str, LeadVerificationResult] = {}
     results: list[LeadVerificationResult] = []
-    for lead in leads:
+    for position, lead in enumerate(leads, start=1):
         if lead.email not in cache:
-            cache[lead.email] = waterfall.verify(lead.email)
-        results.append(cache[lead.email])
+            try:
+                cache[lead.email] = waterfall.verify(lead.email)
+            except VerificationAbortedError as exc:
+                raise VerificationAbortedError(
+                    f"{exc} [stopped at lead {position} of {len(leads)}; no report produced]"
+                ) from None
+        results.append(with_lead_context(cache[lead.email], lead))
+
+    deliverable_leads: list[LeadVerificationResult] = []
+    seen: set[str] = set()
+    for result in results:
+        if result.deliverable and result.email not in seen:
+            seen.add(result.email)
+            deliverable_leads.append(result)
 
     return VerificationBatchReport(
         total_leads=len(results),
@@ -41,7 +58,8 @@ def run_verification(leads: list[LeadInput], waterfall: VerificationWaterfall) -
         risky_count=sum(1 for r in results if r.status == "risky"),
         invalid_count=sum(1 for r in results if r.status == "invalid"),
         unknown_count=sum(1 for r in results if r.status == "unknown"),
-        deliverable_emails=list(dict.fromkeys(r.email for r in results if r.deliverable)),
+        deliverable_emails=[r.email for r in deliverable_leads],
+        deliverable_leads=deliverable_leads,
         results=results,
     )
 
@@ -93,7 +111,11 @@ def main() -> int:
         HttpWebhookReadinessNotifier(args.webhook_url) if args.webhook_url.strip() else NoopReadinessNotifier()
     )
 
-    report = run_verification(leads, VerificationWaterfall(providers))
+    try:
+        report = run_verification(leads, VerificationWaterfall(providers))
+    except VerificationAbortedError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     # Print first so the JSON report is always in the logs, even if webhook delivery fails.
     print(report.model_dump_json(indent=2), flush=True)
 

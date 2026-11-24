@@ -111,6 +111,9 @@ flowchart LR
 | **Deliverable** | `true` only when the final status is `valid` |
 | **Duplicates** | The same email appears once per lead in `results`, but is verified only once per batch |
 | **Strict mode** | `--strict` exits `1` if any lead is risky, invalid or unknown |
+| **Circuit breaker: auth** | A `401` / `403`, or a MillionVerifier account error (bad key, no credits), aborts the whole run immediately with exit `2` |
+| **Circuit breaker: outage** | 3 provider errors in a row (network, timeout, 5xx) abort the run with exit `2`; any successful call resets the count |
+| **Lead context** | Each result keeps the lead's `first_name`, `last_name` and `company_domain`; `deliverable_leads` is an upload-ready list of valid leads |
 
 | Run | Command |
 |---|---|
