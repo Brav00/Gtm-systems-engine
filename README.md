@@ -79,26 +79,64 @@ A domain's warm-up health is judged by its **weakest mailbox**: the lowest reput
 
 **Exit codes:** `0` the run completed · `1` `--strict` and at least one domain is blocked · `2` an error (Smartlead API or webhook failure; the key is never printed).
 
-## Day 2: Lead verification waterfall
+## Day 2: Cost-optimized lead verification waterfall
 
-Verifies lead emails before they enter a sequence. Clear answers stop at the first provider; only unsure results pay for a second opinion.
+Verifies lead emails before they enter a sequence. Free checks run first, clear answers stop at the first provider, and only unsure results pay for a second opinion.
 
 ```mermaid
-flowchart LR
-    L["Raw leads<br/>--leads-file leads.json<br/>email trimmed + lowercased"] --> S{"Syntax check<br/>free, local"}
-    S -->|"malformed"| X
-    S -->|"looks like an email"| P1["Provider 1 (primary)<br/>MillionVerifier · mock_primary"]
-    P1 -->|"valid / invalid:<br/>stop, save credits"| SPLIT{"Valid / Risky / Invalid split"}
-    P1 -->|"risky / unknown"| P2["Conditional fallback<br/>Provider 2"]
+flowchart TD
+    subgraph INPUT["Input"]
+        RAW["Raw lead list · JSON<br/>email · first_name · last_name · company_domain"]
+        MODE["Mode<br/>--mode mock or live"]
+    end
+
+    subgraph PRE["Free pre-filter gate · no credits spent"]
+        NORM["Normalize email<br/>trim + lowercase"]
+        DEDUP{"Already checked<br/>in this batch?"}
+        SYN{"Syntax check<br/>name@domain.tld"}
+    end
+
+    subgraph WF["Waterfall routing"]
+        P1["Provider 1 · primary<br/>MillionVerifier or mock"]
+        R1{"Provider 1 result"}
+        P2["Provider 2 · fallback verifier<br/>final verification pass"]
+        CB{{"Circuit breaker<br/>401/403 auth error: abort now<br/>3 failures in a row: abort<br/>otherwise: count as unknown"}}
+    end
+
+    subgraph OUT["Outputs"]
+        SPLIT{"Split by final status"}
+        V["🟢 Valid<br/>deliverable_leads list"]
+        R["🟡 Risky or unknown<br/>catch-all review"]
+        X["🔴 Invalid<br/>dropped"]
+        REP["VerificationBatchReport JSON"]
+        HOOK["Outbound webhook<br/>Clay · n8n · Slack"]
+        EXIT["Exit codes<br/>0 ok · 1 strict fail · 2 error"]
+    end
+
+    ABORT["⛔ Run aborted<br/>no report · no webhook · exit 2"]
+
+    RAW --> NORM
+    MODE --> P1
+    NORM --> DEDUP
+    DEDUP -->|"yes: reuse cached result"| SPLIT
+    DEDUP -->|"no"| SYN
+    SYN -->|"malformed: invalid, 0 credits"| SPLIT
+    SYN -->|"looks like an email"| P1
+    P1 --> R1
+    R1 -->|"valid or invalid: stop, save credits"| SPLIT
+    R1 -->|"risky catch-all or unknown: escalate"| P2
     P2 --> SPLIT
-    SPLIT --> V["🟢 Valid<br/>deliverable"]
-    SPLIT --> R["🟡 Risky / Unknown<br/>hold back"]
-    SPLIT --> X["🔴 Invalid<br/>suppress"]
-    V --> J["JSON VerificationBatchReport"]
-    R --> J
-    X --> J
-    J --> W["Webhook<br/>Slack / n8n / Clay"]
-    J --> E["Exit codes<br/>0 ok · 1 strict · 2 error"]
+    P1 -.->|"API error"| CB
+    P2 -.->|"API error"| CB
+    CB -->|"tripped"| ABORT
+    SPLIT --> V
+    SPLIT --> R
+    SPLIT --> X
+    V --> REP
+    R --> REP
+    X --> REP
+    REP --> HOOK
+    REP --> EXIT
 ```
 
 | Area | Rule |
