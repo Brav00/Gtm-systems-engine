@@ -17,6 +17,10 @@ on:
         description: "DNS check mode: mock or live"
         required: true
         default: "mock"
+      warmup_mode:
+        description: "Warm-up check mode: mock or live (Smartlead API)"
+        required: false
+        default: "mock"
       selector:
         description: "DKIM selector"
         required: false
@@ -58,14 +62,17 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         env:
           READINESS_WEBHOOK_URL: ${{ secrets.READINESS_WEBHOOK_URL }}
+          SMARTLEAD_API_KEY: ${{ secrets.SMARTLEAD_API_KEY }}
         run: |
           DOMAINS="${{ github.event.inputs.domains || 'healthy-outreach.com,throttled-sender.com,quarantined-sender.com' }}"
           DNS_MODE="${{ github.event.inputs.dns_mode || 'mock' }}"
+          WARMUP_MODE="${{ github.event.inputs.warmup_mode || 'mock' }}"
           SELECTOR="${{ github.event.inputs.selector || 'google' }}"
           TRACKING_HOST="${{ github.event.inputs.tracking_host || 'mail' }}"
 
           python -m gtm_engine.cli.check_readiness \
             --domains "$DOMAINS" \
             --dns-mode "$DNS_MODE" \
+            --warmup-mode "$WARMUP_MODE" \
             --selector "$SELECTOR" \
             --tracking-host "$TRACKING_HOST"
