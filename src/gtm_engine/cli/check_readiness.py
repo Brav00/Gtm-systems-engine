@@ -6,6 +6,7 @@ from gtm_engine.adapters.http_webhook_notifier import HttpWebhookReadinessNotifi
 from gtm_engine.adapters.mock_dns import MockDeliverabilityAdapter
 from gtm_engine.adapters.mock_warmup import MockWarmupMonitorAdapter
 from gtm_engine.adapters.noop_notifier import NoopReadinessNotifier
+from gtm_engine.adapters.smartlead_warmup import SmartleadWarmupAdapter
 from gtm_engine.contracts.readiness import DomainReadinessDecision, ReadinessBatchReport
 from gtm_engine.ports.deliverability import DeliverabilityAuditorPort
 from gtm_engine.ports.notifications import ReadinessNotifierPort
@@ -88,6 +89,17 @@ def main() -> int:
     parser.add_argument("--dns-mode", choices=["mock", "live"], default="mock", help="DNS check mode.")
     parser.add_argument("--dns-fixture", default="fixtures/sample_domains.json", help="Path to DNS mock fixture.")
     parser.add_argument("--warmup-fixture", default="fixtures/sample_warmup.json", help="Path to warm-up mock fixture.")
+    parser.add_argument(
+        "--warmup-mode",
+        choices=["mock", "live"],
+        default="mock",
+        help="Warm-up check mode: mock fixture or live Smartlead API.",
+    )
+    parser.add_argument(
+        "--smartlead-api-key",
+        default=os.environ.get("SMARTLEAD_API_KEY", ""),
+        help="Smartlead API key for --warmup-mode live (default: $SMARTLEAD_API_KEY).",
+    )
     parser.add_argument("--selector", default="google", help="DKIM selector.")
     parser.add_argument("--tracking-host", default="mail", help="Tracking subdomain.")
     parser.add_argument("--strict", action="store_true", help="Exit non-zero if any domain is blocked.")
@@ -103,6 +115,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.warmup_mode == "live" and not args.smartlead_api_key.strip():
+        parser.error("--warmup-mode live requires --smartlead-api-key or SMARTLEAD_API_KEY")
+
     domain_list = [d.strip() for d in args.domains.split(",") if d.strip()]
 
     dns_auditor: DeliverabilityAuditorPort = (
@@ -110,18 +125,26 @@ def main() -> int:
         if args.dns_mode == "live"
         else MockDeliverabilityAdapter(args.dns_fixture)
     )
-    warmup_monitor: WarmupMonitorPort = MockWarmupMonitorAdapter(args.warmup_fixture)
+    warmup_monitor: WarmupMonitorPort = (
+        SmartleadWarmupAdapter(args.smartlead_api_key)
+        if args.warmup_mode == "live"
+        else MockWarmupMonitorAdapter(args.warmup_fixture)
+    )
     notifier: ReadinessNotifierPort = (
         HttpWebhookReadinessNotifier(args.webhook_url) if args.webhook_url.strip() else NoopReadinessNotifier()
     )
 
-    report = run_readiness_check(
-        domains=domain_list,
-        dns_auditor=dns_auditor,
-        warmup_monitor=warmup_monitor,
-        selector=args.selector,
-        tracking_host=args.tracking_host,
-    )
+    try:
+        report = run_readiness_check(
+            domains=domain_list,
+            dns_auditor=dns_auditor,
+            warmup_monitor=warmup_monitor,
+            selector=args.selector,
+            tracking_host=args.tracking_host,
+        )
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     # Print first so the JSON report is always in the logs, even if webhook delivery fails.
     print(report.model_dump_json(indent=2), flush=True)
 
