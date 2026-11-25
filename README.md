@@ -168,46 +168,51 @@ Turns the Day 1 and Day 2 reports into a Smartlead campaign: only healthy inboxe
 ```mermaid
 flowchart TD
     subgraph INPUT["Inputs"]
-        D1["Day 1 readiness report<br/>ready_to_send + daily cap per domain"]
-        D2["Day 2 verification report<br/>status per lead"]
+        D1["Day 1 readiness report<br/>ready_to_send · daily cap per domain"]
+        D2["Day 2 verification report<br/>status · name · company per lead"]
+        CFG["Campaign config<br/>--campaign-name or --campaign-id<br/>--mode mock or live · --activate"]
     end
 
-    subgraph GUARD["Safety guardrails · checked before any write"]
-        G1{"Ready domains<br/>with cap above 0?"}
-        G2{"Valid leads<br/>after stripping risky, invalid, unknown, duplicates?"}
-        G3{"Healthy inboxes<br/>on ready domains?"}
+    subgraph GUARD["Pre-flight safety guardrails · read-only, no changes yet"]
+        G1{"1 · Day 1 domains<br/>ready with daily cap above 0?"}
+        G2{"2 · Day 2 leads<br/>valid and deduplicated?"}
+        G3{"3 · live mode: Smartlead mailboxes on ready domains<br/>connected · ACTIVE · unblocked?"}
+        G4{"4 · live mode: reusing --campaign-id<br/>already active without --activate?"}
     end
 
-    subgraph SL["Smartlead campaign provisioner"]
-        C1["Create campaign<br/>or reuse --campaign-id"]
-        C2["Attach healthy inboxes<br/>SMTP ok · warm-up ACTIVE · not blocked"]
-        C3["Upload valid leads<br/>batches of 100 · block lists respected"]
-        C4{"--activate?"}
+    subgraph EXEC["Execution sequence · Smartlead client"]
+        E1["Create campaign · DRAFTED by default<br/>or reuse --campaign-id"]
+        E2["Attach healthy mailbox IDs"]
+        E3["Batch upload valid leads<br/>100 per chunk · block lists respected"]
+        E4{"--activate set?"}
         DRAFT["Stay drafted or paused"]
-        START["Start campaign"]
+        START["Send START"]
     end
 
     subgraph OUT["Outputs"]
         REP["CampaignProvisioningReport JSON"]
-        HOOK["Outbound webhook<br/>Clay · n8n · Slack"]
-        EXIT["Exit codes<br/>0 ok · 1 guardrail block · 2 error"]
+        HOOK["Outbound webhook<br/>Slack · n8n · Clay"]
+        EXIT["Exit codes<br/>0 provisioned · 1 guardrail blocked · 2 error"]
     end
 
-    STOP["⛔ Blocked<br/>no campaign changes · exit 1"]
+    BLOCK["⛔ Guardrail blocked<br/>no campaign changes · exit 1"]
 
     D1 --> G1
     D2 --> G2
-    G1 -->|"no"| STOP
+    CFG --> G4
+    G1 -->|"none ready"| BLOCK
     G1 -->|"yes"| G2
-    G2 -->|"no"| STOP
+    G2 -->|"no valid leads"| BLOCK
     G2 -->|"yes"| G3
-    G3 -->|"no"| STOP
-    G3 -->|"yes"| C1
-    C1 --> C2
-    C2 --> C3
-    C3 --> C4
-    C4 -->|"no, default"| DRAFT
-    C4 -->|"yes"| START
+    G3 -->|"no healthy mailboxes"| BLOCK
+    G3 -->|"yes"| G4
+    G4 -->|"yes: would start sending"| BLOCK
+    G4 -->|"no, or new campaign"| E1
+    E1 --> E2
+    E2 --> E3
+    E3 --> E4
+    E4 -->|"no, default"| DRAFT
+    E4 -->|"yes"| START
     DRAFT --> REP
     START --> REP
     REP --> HOOK
