@@ -309,29 +309,6 @@ Targets file format: `{"keywords": [...], "targets": [{"company_name": "...", "c
 
 `run_pipeline` chains every stage: load leads from any source, verify them (Day 2), check the sending domains (Day 1), then provision the campaign (Day 3). Guardrails stop it before any campaign change, and it stays drafted unless you pass `--launch`.
 
-```mermaid
-flowchart LR
-    SRC["Lead source<br/>Clay · Cargo · Google Sheet · CSV · JSON · mock"]
-    PORT["LeadSourcePort<br/>headers mapped to standard lead fields"]
-    VER["Day 2 verification waterfall<br/>dedupe · valid leads only"]
-    GATE["Day 1 deliverability gate<br/>ready domains with cap above 0"]
-    G{"Guardrails<br/>ready domains and valid leads?"}
-    PROV["Day 3 campaign provisioner<br/>draft by default · --launch starts"]
-    SL["Smartlead campaign"]
-    OUT["Run summary JSON + webhook<br/>runs/campaign/timestamp"]
-    STOP["⛔ Blocked · exit 1<br/>no campaign changes"]
-
-    SRC --> PORT
-    PORT --> VER
-    VER --> GATE
-    GATE --> G
-    G -->|"no"| STOP
-    G -->|"yes"| PROV
-    PROV --> SL
-    PROV --> OUT
-    STOP --> OUT
-```
-
 | Area | Rule |
 |---|---|
 | **Sources** | `mock` (sample leads), `file` (`.csv` or `.json`, a list or `{"leads": [...]}`), `gsheet` (sheet URL, sheet ID, published link or direct CSV URL; must be shared as "Anyone with the link" or published) |
@@ -341,6 +318,63 @@ flowchart LR
 | **Draft vs launch** | Without `--launch` the campaign stays `DRAFTED`; `--launch` sends `START` as the last step |
 | **Artifacts** | Each run gets its own folder, `runs/<campaign-slug>/<UTC timestamp>/`, with one JSON per stage plus `run_summary.json`; runs never overwrite each other, and `runs/` is git-ignored because it holds lead data |
 | **Exit codes** | `0` provisioned · `1` guardrail block, no campaign changes · `2` bad arguments, missing or unreadable source, missing key, or an API/network failure |
+
+### End-to-end flow
+
+```mermaid
+flowchart LR
+    subgraph SRC["Lead sources"]
+        CLAY["Clay export"]
+        CARGO["Cargo export"]
+        GS["Google Sheet"]
+        FILE["CSV or JSON file"]
+        MOCK["Mock sample leads"]
+    end
+
+    SIG["Day 4 signal collector<br/>public job boards"]
+    SKILL["Claude Code skill<br/>run-gtm-campaign<br/>confirms inputs · draft by default"]
+    CLI["run_pipeline.py<br/>--source-type · --domains · --mode · --launch"]
+
+    subgraph PIPE["run_pipeline stages"]
+        S1["Stage 1 · load leads<br/>LeadSourcePort maps headers"]
+        S2["Stage 2 · Day 2 verification<br/>dedupe · valid leads only"]
+        S3["Stage 3 · Day 1 domain gate<br/>ready domains with cap above 0"]
+        G{"Guardrails<br/>ready domains and valid leads?"}
+        S4["Stage 4 · Day 3 provisioning<br/>create or reuse · attach inboxes · upload leads"]
+    end
+
+    L{"--launch set?"}
+    DRAFT["Smartlead campaign<br/>DRAFTED · not sending"]
+    ACTIVE["Smartlead campaign<br/>ACTIVE · sending"]
+    E0["Exit 0<br/>provisioned"]
+    E1["Exit 1<br/>guardrail block · no campaign changes"]
+    E2["Exit 2<br/>bad input · missing key · API or network error"]
+    ART["runs/campaign-slug/timestamp<br/>stage JSON + run_summary.json"]
+    HOOK["Webhook<br/>Slack · n8n · Clay"]
+
+    SIG -.->|"hooks added as a signal_hook column"| SRC
+    SKILL --> CLI
+    SRC --> S1
+    CLI --> S1
+    S1 --> S2
+    S2 --> S3
+    S3 --> G
+    G -->|"no"| E1
+    G -->|"yes"| S4
+    S4 --> L
+    L -->|"no, default"| DRAFT
+    L -->|"yes"| ACTIVE
+    DRAFT --> E0
+    ACTIVE --> E0
+    PIPE -.->|"any stage fails"| E2
+    E0 --> ART
+    E1 --> ART
+    E2 --> ART
+    E0 --> HOOK
+    E1 --> HOOK
+```
+
+Day 4 is not wired into `run_pipeline` yet: its hooks reach a campaign when you add them to your lead file or Clay table as a `signal_hook` column. The webhook is sent for exit `0` and `1`; exit `2` from bad arguments stops before a run folder is created.
 
 | Run | Command |
 |---|---|
