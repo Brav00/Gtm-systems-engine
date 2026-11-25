@@ -240,6 +240,71 @@ flowchart TD
 
 Create the input reports with `check_readiness … > readiness.json` (Day 1) and `verify_leads … > verification.json` (Day 2).
 
+## Day 4: Public-data intent signal collector
+
+Scans target companies' public job boards for roles that signal buying intent, such as a new RevOps hire or a growing sales team, and turns each match into a one-line "why now" hook for outreach. No API key is needed: Greenhouse job boards are public.
+
+```mermaid
+flowchart TD
+    subgraph INPUT["Inputs"]
+        T["Target companies<br/>company_name · company_domain · board_token"]
+        K["Intent keywords<br/>--keywords or targets file · empty means all roles"]
+        M["Mode<br/>--mode mock or live"]
+    end
+
+    subgraph PORT["Signal collector port"]
+        MOCK["Mock collector<br/>3 fixed sample boards · offline"]
+        LIVE["Live public job boards<br/>Greenhouse boards-api · no API key"]
+        ERR["Per-board errors recorded<br/>404 · timeout · unreachable<br/>batch keeps going"]
+    end
+
+    subgraph PIPE["Signal pipeline"]
+        F["Keyword filter<br/>case-insensitive title match"]
+        DD["Deduplicate<br/>signal_id from domain + type + title"]
+        H["Hook generator<br/>Hiring for title, indicates why now"]
+    end
+
+    subgraph OUT["Outputs"]
+        REP["SignalBatchReport JSON"]
+        HOOK["Outbound webhook<br/>Clay · n8n · Slack"]
+        EXIT["Exit codes<br/>0 ok · 1 strict, no matches · 2 error"]
+    end
+
+    T --> MOCK
+    T --> LIVE
+    M --> MOCK
+    M --> LIVE
+    LIVE -.->|"board fails"| ERR
+    MOCK --> F
+    LIVE --> F
+    K --> F
+    F --> DD
+    DD --> H
+    H --> REP
+    ERR --> REP
+    REP --> HOOK
+    REP --> EXIT
+```
+
+| Area | Rule |
+|---|---|
+| **Source** | `live`: `GET https://boards-api.greenhouse.io/v1/boards/<board_token>/jobs` for each target · `mock`: 3 fixed sample boards assigned to the targets in order |
+| **Keyword filter** | A role matches if any keyword appears anywhere in its title, ignoring case; no keywords returns every role |
+| **Signal ID** | `sig_` + hash of company domain, signal type and normalized title, so the same role always gets the same ID |
+| **Deduplication** | The same title at the same company counts once, even if posted in several locations; the first posting is kept |
+| **Hook** | `Hiring for <title> — indicates <theme>`; theme is RevOps, GTM leadership, sales expansion, growth and marketing, or GTM scaling |
+| **Errors** | A board that fails is listed in `errors` (for example `greenhouse:acme:http_404`) and the rest still run; if every board fails, exit `2` |
+| **Signal type** | Job-board roles are `hiring_intent`; the other types are reserved for future collectors |
+
+| Run | Command |
+|---|---|
+| **Sample data** | `python -m gtm_engine.cli.collect_signals` |
+| **Live job boards** | `python -m gtm_engine.cli.collect_signals --mode live --keywords "RevOps,Revenue Operations,Sales Development"` |
+| **Fail if nothing found** | Add `--strict` |
+| **Send to a webhook** | Add `--webhook-url <url>` (or set `SIGNAL_WEBHOOK_URL`) |
+
+Targets file format: `{"keywords": [...], "targets": [{"company_name": "...", "company_domain": "...", "board_token": "..."}]}`. The board token is the name in the company's Greenhouse jobs URL, for example `stripe`.
+
 ## Master pipeline: one command, end to end
 
 `run_pipeline` chains every stage: load leads from any source, verify them (Day 2), check the sending domains (Day 1), then provision the campaign (Day 3). Guardrails stop it before any campaign change, and it stays drafted unless you pass `--launch`.
@@ -291,11 +356,11 @@ In Claude Code, the project skill `.claude/skills/run-gtm-campaign` runs this fo
 
 ```text
 src/gtm_engine/
-  contracts/   Pydantic JSON contracts (deliverability, warmup, readiness, leads, lead sources, campaign, pipeline)
+  contracts/   Pydantic JSON contracts (deliverability, warmup, readiness, leads, lead sources, campaign, signals, pipeline)
   ports/       Protocol interfaces the core depends on
-  adapters/    Vendor/data-source implementations (lead sources, DNS, warm-up, email verification, campaigns, webhook)
-  cli/         run_pipeline (end to end), audit_domains, evaluate_warmup, check_readiness, verify_leads, provision_campaign
-fixtures/      Sample DNS, warm-up and lead data, plus sample Day 1 and Day 2 reports
+  adapters/    Vendor/data-source implementations (lead sources, DNS, warm-up, email verification, campaigns, job boards, webhook)
+  cli/         run_pipeline (end to end), audit_domains, evaluate_warmup, check_readiness, verify_leads, provision_campaign, collect_signals
+fixtures/      Sample DNS, warm-up, lead and signal-target data, plus sample Day 1 and Day 2 reports
 tests/         pytest suite (all network calls mocked)
 .claude/skills/ Claude Code project skill: run-gtm-campaign
 ```

@@ -1,0 +1,8 @@
+{
+  "keywords": ["Growth", "Revenue", "Sales", "Marketing"],
+  "targets": [
+    {"company_name": "Stripe", "company_domain": "stripe.com", "board_token": "stripe"},
+    {"company_name": "Figma", "company_domain": "figma.com", "board_token": "figma"},
+    {"company_name": "Vercel", "company_domain": "vercel.com", "board_token": "vercel"}
+  ]
+}
