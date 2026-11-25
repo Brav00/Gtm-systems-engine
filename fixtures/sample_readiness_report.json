@@ -1,0 +1,191 @@
+{
+  "total_domains": 4,
+  "ready_count": 1,
+  "blocked_count": 3,
+  "total_daily_capacity": 30,
+  "decisions": [
+    {
+      "domain": "healthy-outreach.com",
+      "evaluated_at": "2026-11-25T13:20:18.625928Z",
+      "ready_to_send": true,
+      "rotation_status": "active",
+      "effective_daily_cap": 30,
+      "blocking_reasons": [],
+      "dns_report": {
+        "domain": "healthy-outreach.com",
+        "provider": "mock_fixture",
+        "audited_at": "2026-11-25T13:20:18.624496Z",
+        "mx_present": true,
+        "spf_present": true,
+        "spf_valid_syntax": true,
+        "dkim_selector_found": true,
+        "dmarc_present": true,
+        "dmarc_policy": "quarantine",
+        "tracking_cname_valid": true,
+        "gate_passed": true,
+        "reasons": []
+      },
+      "warmup_report": {
+        "domain": "healthy-outreach.com",
+        "provider": "mock_warmup_fixture",
+        "evaluated_at": "2026-11-25T13:20:18.625607Z",
+        "warmup_score": 94,
+        "bounce_rate_pct": 0.6,
+        "daily_send_limit": 35,
+        "recommended_daily_cap": 30,
+        "rotation_status": "active",
+        "gate_passed": true,
+        "reasons": []
+      }
+    },
+    {
+      "domain": "throttled-sender.com",
+      "evaluated_at": "2026-11-25T13:20:18.626724Z",
+      "ready_to_send": false,
+      "rotation_status": "throttled",
+      "effective_daily_cap": 0,
+      "blocking_reasons": [
+        "dns:missing_mx",
+        "dns:invalid_or_missing_spf",
+        "dns:missing_dkim_selector:google",
+        "dns:missing_dmarc",
+        "dns:invalid_tracking_cname:mail"
+      ],
+      "dns_report": {
+        "domain": "throttled-sender.com",
+        "provider": "mock_fixture",
+        "audited_at": "2026-11-25T13:20:18.626662Z",
+        "mx_present": false,
+        "spf_present": false,
+        "spf_valid_syntax": false,
+        "dkim_selector_found": false,
+        "dmarc_present": false,
+        "dmarc_policy": "missing",
+        "tracking_cname_valid": false,
+        "gate_passed": false,
+        "reasons": [
+          "missing_mx",
+          "invalid_or_missing_spf",
+          "missing_dkim_selector:google",
+          "missing_dmarc",
+          "invalid_tracking_cname:mail"
+        ]
+      },
+      "warmup_report": {
+        "domain": "throttled-sender.com",
+        "provider": "mock_warmup_fixture",
+        "evaluated_at": "2026-11-25T13:20:18.626685Z",
+        "warmup_score": 76,
+        "bounce_rate_pct": 1.8,
+        "daily_send_limit": 30,
+        "recommended_daily_cap": 15,
+        "rotation_status": "throttled",
+        "gate_passed": true,
+        "reasons": [
+          "warmup_below_target:76",
+          "elevated_bounce_rate:1.8"
+        ]
+      }
+    },
+    {
+      "domain": "quarantined-sender.com",
+      "evaluated_at": "2026-11-25T13:20:18.626747Z",
+      "ready_to_send": false,
+      "rotation_status": "quarantined",
+      "effective_daily_cap": 0,
+      "blocking_reasons": [
+        "dns:missing_mx",
+        "dns:invalid_or_missing_spf",
+        "dns:missing_dkim_selector:google",
+        "dns:missing_dmarc",
+        "dns:invalid_tracking_cname:mail",
+        "warmup:low_warmup_score:52",
+        "warmup:high_bounce_rate:4.5"
+      ],
+      "dns_report": {
+        "domain": "quarantined-sender.com",
+        "provider": "mock_fixture",
+        "audited_at": "2026-11-25T13:20:18.626732Z",
+        "mx_present": false,
+        "spf_present": false,
+        "spf_valid_syntax": false,
+        "dkim_selector_found": false,
+        "dmarc_present": false,
+        "dmarc_policy": "missing",
+        "tracking_cname_valid": false,
+        "gate_passed": false,
+        "reasons": [
+          "missing_mx",
+          "invalid_or_missing_spf",
+          "missing_dkim_selector:google",
+          "missing_dmarc",
+          "invalid_tracking_cname:mail"
+        ]
+      },
+      "warmup_report": {
+        "domain": "quarantined-sender.com",
+        "provider": "mock_warmup_fixture",
+        "evaluated_at": "2026-11-25T13:20:18.626740Z",
+        "warmup_score": 52,
+        "bounce_rate_pct": 4.5,
+        "daily_send_limit": 25,
+        "recommended_daily_cap": 0,
+        "rotation_status": "quarantined",
+        "gate_passed": false,
+        "reasons": [
+          "low_warmup_score:52",
+          "high_bounce_rate:4.5"
+        ]
+      }
+    },
+    {
+      "domain": "broken-sender.com",
+      "evaluated_at": "2026-11-25T13:20:18.626765Z",
+      "ready_to_send": false,
+      "rotation_status": "quarantined",
+      "effective_daily_cap": 0,
+      "blocking_reasons": [
+        "dns:invalid_or_missing_spf",
+        "dns:missing_dkim_selector:google",
+        "dns:missing_dmarc",
+        "dns:invalid_tracking_cname:mail",
+        "warmup:low_warmup_score:0",
+        "warmup:high_bounce_rate:100.0"
+      ],
+      "dns_report": {
+        "domain": "broken-sender.com",
+        "provider": "mock_fixture",
+        "audited_at": "2026-11-25T13:20:18.626753Z",
+        "mx_present": true,
+        "spf_present": true,
+        "spf_valid_syntax": false,
+        "dkim_selector_found": false,
+        "dmarc_present": false,
+        "dmarc_policy": "missing",
+        "tracking_cname_valid": false,
+        "gate_passed": false,
+        "reasons": [
+          "invalid_or_missing_spf",
+          "missing_dkim_selector:google",
+          "missing_dmarc",
+          "invalid_tracking_cname:mail"
+        ]
+      },
+      "warmup_report": {
+        "domain": "broken-sender.com",
+        "provider": "mock_warmup_fixture",
+        "evaluated_at": "2026-11-25T13:20:18.626758Z",
+        "warmup_score": 0,
+        "bounce_rate_pct": 100.0,
+        "daily_send_limit": 0,
+        "recommended_daily_cap": 0,
+        "rotation_status": "quarantined",
+        "gate_passed": false,
+        "reasons": [
+          "low_warmup_score:0",
+          "high_bounce_rate:100.0"
+        ]
+      }
+    }
+  ]
+}

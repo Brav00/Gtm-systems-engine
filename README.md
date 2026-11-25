@@ -161,15 +161,89 @@ flowchart TD
 
 Leads file format: a JSON list of objects with `email` (required) and optional `first_name`, `last_name`, `company_domain`.
 
+## Day 3: Programmatic campaign provisioning
+
+Turns the Day 1 and Day 2 reports into a Smartlead campaign: only healthy inboxes on ready domains are attached, only valid leads are uploaded, and the campaign stays drafted unless you pass `--activate`.
+
+```mermaid
+flowchart TD
+    subgraph INPUT["Inputs"]
+        D1["Day 1 readiness report<br/>ready_to_send + daily cap per domain"]
+        D2["Day 2 verification report<br/>status per lead"]
+    end
+
+    subgraph GUARD["Safety guardrails · checked before any write"]
+        G1{"Ready domains<br/>with cap above 0?"}
+        G2{"Valid leads<br/>after stripping risky, invalid, unknown, duplicates?"}
+        G3{"Healthy inboxes<br/>on ready domains?"}
+    end
+
+    subgraph SL["Smartlead campaign provisioner"]
+        C1["Create campaign<br/>or reuse --campaign-id"]
+        C2["Attach healthy inboxes<br/>SMTP ok · warm-up ACTIVE · not blocked"]
+        C3["Upload valid leads<br/>batches of 100 · block lists respected"]
+        C4{"--activate?"}
+        DRAFT["Stay drafted or paused"]
+        START["Start campaign"]
+    end
+
+    subgraph OUT["Outputs"]
+        REP["CampaignProvisioningReport JSON"]
+        HOOK["Outbound webhook<br/>Clay · n8n · Slack"]
+        EXIT["Exit codes<br/>0 ok · 1 guardrail block · 2 error"]
+    end
+
+    STOP["⛔ Blocked<br/>no campaign changes · exit 1"]
+
+    D1 --> G1
+    D2 --> G2
+    G1 -->|"no"| STOP
+    G1 -->|"yes"| G2
+    G2 -->|"no"| STOP
+    G2 -->|"yes"| G3
+    G3 -->|"no"| STOP
+    G3 -->|"yes"| C1
+    C1 --> C2
+    C2 --> C3
+    C3 --> C4
+    C4 -->|"no, default"| DRAFT
+    C4 -->|"yes"| START
+    DRAFT --> REP
+    START --> REP
+    REP --> HOOK
+    REP --> EXIT
+```
+
+| Area | Rule |
+|---|---|
+| **Domains** | Only Day 1 domains with `ready_to_send: true` and a daily cap above 0; the rest are listed in `excluded_domains` |
+| **Inboxes** | Only Smartlead accounts on those domains with SMTP connected, warm-up `ACTIVE` and not blocked |
+| **Leads** | Only Day 2 results with `status: valid`; risky, invalid, unknown and duplicate emails are skipped and counted |
+| **Guardrails** | `no_ready_domains_available`, `no_valid_leads_to_upload`, `no_healthy_mailboxes_on_ready_domains` and `campaign_already_active` stop the run before any write, with exit `1` |
+| **Existing campaign** | `--campaign-id` reuses it; if it is already `ACTIVE`, provisioning needs `--activate` so leads never start sending by surprise |
+| **Activation** | Off by default: new campaigns stay `DRAFTED`; `--activate` sends `START` as the last step |
+| **Capacity** | `total_daily_capacity` is the sum of Day 1 daily caps for the domains that got inboxes attached |
+| **Partial failure** | If a write fails after the campaign exists, the error names the campaign ID and how many leads were uploaded |
+
+| Run | Command |
+|---|---|
+| **Sample data** | `python -m gtm_engine.cli.provision_campaign --campaign-name "Q1 Outbound" --readiness-report fixtures/sample_readiness_report.json --verification-report fixtures/sample_verification_report.json` |
+| **Live, stays drafted** | `SMARTLEAD_API_KEY=… python -m gtm_engine.cli.provision_campaign --mode live --campaign-name "Q1 Outbound" --readiness-report readiness.json --verification-report verification.json` |
+| **Live, start sending** | Add `--activate` |
+| **Add to an existing campaign** | Add `--campaign-id <id>` |
+| **Send to a webhook** | Add `--webhook-url <url>` (or set `CAMPAIGN_WEBHOOK_URL`) |
+
+Create the input reports with `check_readiness … > readiness.json` (Day 1) and `verify_leads … > verification.json` (Day 2).
+
 ## Layout
 
 ```text
 src/gtm_engine/
-  contracts/   Pydantic JSON contracts (deliverability, warmup, readiness, leads)
+  contracts/   Pydantic JSON contracts (deliverability, warmup, readiness, leads, campaign)
   ports/       Protocol interfaces the core depends on
-  adapters/    Vendor/data-source implementations (DNS, warm-up, email verification, webhook)
-  cli/         audit_domains, evaluate_warmup, check_readiness, verify_leads
-fixtures/      Sample DNS, warm-up and lead data for mock mode
+  adapters/    Vendor/data-source implementations (DNS, warm-up, email verification, campaigns, webhook)
+  cli/         audit_domains, evaluate_warmup, check_readiness, verify_leads, provision_campaign
+fixtures/      Sample DNS, warm-up and lead data, plus sample Day 1 and Day 2 reports
 tests/         pytest suite (all network calls mocked)
 ```
 
