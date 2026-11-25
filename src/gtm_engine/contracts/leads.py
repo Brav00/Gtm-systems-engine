@@ -1,7 +1,18 @@
 import re
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
+
+from gtm_engine.contracts.lead_source import LeadInput
+
+__all__ = [
+    "LeadInput",
+    "LeadVerificationResult",
+    "VerificationBatchReport",
+    "VerificationStatus",
+    "is_valid_email_syntax",
+    "normalize_email",
+]
 
 
 VerificationStatus = Literal["valid", "risky", "invalid", "unknown"]
@@ -18,23 +29,13 @@ def is_valid_email_syntax(email: str) -> bool:
     return bool(_EMAIL_SYNTAX.fullmatch(email))
 
 
-class LeadInput(BaseModel):
-    email: str
-    first_name: str | None = None
-    last_name: str | None = None
-    company_domain: str | None = None
-
-    @field_validator("email", "company_domain", mode="before")
-    @classmethod
-    def _normalize(cls, value: object) -> object:
-        return normalize_email(value) if isinstance(value, str) else value
-
-
 class LeadVerificationResult(BaseModel):
     email: str
     first_name: str | None = None
     last_name: str | None = None
     company_domain: str | None = None
+    company_name: str | None = None
+    signal_hook: str | None = None
     status: VerificationStatus
     deliverable: bool = False
     provider: str

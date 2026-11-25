@@ -4,6 +4,7 @@ import urllib.request
 from pydantic import BaseModel
 from gtm_engine.contracts.campaign import CampaignProvisioningReport
 from gtm_engine.contracts.leads import VerificationBatchReport
+from gtm_engine.contracts.pipeline import PipelineRunSummary
 from gtm_engine.contracts.readiness import ReadinessBatchReport
 
 
@@ -39,3 +40,6 @@ class HttpWebhookReadinessNotifier:
 
     def notify_campaign(self, report: CampaignProvisioningReport) -> None:
         self.post_payload(report, label="campaign provisioning")
+
+    def notify_pipeline(self, summary: PipelineRunSummary) -> None:
+        self.post_payload(summary, label="pipeline run")

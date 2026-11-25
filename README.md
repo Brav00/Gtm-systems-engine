@@ -240,16 +240,64 @@ flowchart TD
 
 Create the input reports with `check_readiness … > readiness.json` (Day 1) and `verify_leads … > verification.json` (Day 2).
 
+## Master pipeline: one command, end to end
+
+`run_pipeline` chains every stage: load leads from any source, verify them (Day 2), check the sending domains (Day 1), then provision the campaign (Day 3). Guardrails stop it before any campaign change, and it stays drafted unless you pass `--launch`.
+
+```mermaid
+flowchart LR
+    SRC["Lead source<br/>Clay · Cargo · Google Sheet · CSV · JSON · mock"]
+    PORT["LeadSourcePort<br/>headers mapped to standard lead fields"]
+    VER["Day 2 verification waterfall<br/>dedupe · valid leads only"]
+    GATE["Day 1 deliverability gate<br/>ready domains with cap above 0"]
+    G{"Guardrails<br/>ready domains and valid leads?"}
+    PROV["Day 3 campaign provisioner<br/>draft by default · --launch starts"]
+    SL["Smartlead campaign"]
+    OUT["Run summary JSON + webhook<br/>runs/campaign/timestamp"]
+    STOP["⛔ Blocked · exit 1<br/>no campaign changes"]
+
+    SRC --> PORT
+    PORT --> VER
+    VER --> GATE
+    GATE --> G
+    G -->|"no"| STOP
+    G -->|"yes"| PROV
+    PROV --> SL
+    PROV --> OUT
+    STOP --> OUT
+```
+
+| Area | Rule |
+|---|---|
+| **Sources** | `mock` (sample leads), `file` (`.csv` or `.json`, a list or `{"leads": [...]}`), `gsheet` (sheet URL, sheet ID, published link or direct CSV URL; must be shared as "Anyone with the link" or published) |
+| **Header mapping** | `Email` / `Work Email` / `email_address`, `First Name`, `Last Name`, `Company Domain` / `Domain` / `Website` (cleaned to `acme.com`), `Company Name` / `Company`, `Signal Hook` / `Hook`; other columns are kept in `extra` but never uploaded |
+| **Lead context** | First and last name, company name and website go to Smartlead; the hook goes in as the custom field `signal_hook`, usable in sequences as `{{signal_hook}}` |
+| **Guardrails** | No ready domains or no valid leads stops before provisioning with exit `1`, listing every reason (blocked domains with their DNS and warm-up reasons, lead counts) |
+| **Draft vs launch** | Without `--launch` the campaign stays `DRAFTED`; `--launch` sends `START` as the last step |
+| **Artifacts** | Each run gets its own folder, `runs/<campaign-slug>/<UTC timestamp>/`, with one JSON per stage plus `run_summary.json`; runs never overwrite each other, and `runs/` is git-ignored because it holds lead data |
+| **Exit codes** | `0` provisioned · `1` guardrail block, no campaign changes · `2` bad arguments, missing or unreadable source, missing key, or an API/network failure |
+
+| Run | Command |
+|---|---|
+| **Sample data** | `python -m gtm_engine.cli.run_pipeline --source-type mock --domains healthy-outreach.com,quarantined-sender.com --campaign-name "Q1 RevOps Push"` |
+| **Clay / Cargo CSV, live draft** | `VERIFIER_API_KEY=… SMARTLEAD_API_KEY=… python -m gtm_engine.cli.run_pipeline --source-type file --source-ref leads.csv --domains acme-mail.com --campaign-name "Q1 RevOps Push" --mode live` |
+| **Google Sheet** | `--source-type gsheet --source-ref "https://docs.google.com/spreadsheets/d/<id>/edit#gid=0"` |
+| **Start sending** | Add `--launch` (and `--campaign-id <id>` to launch the draft you already created) |
+| **Webhook** | Add `--webhook-url <url>` (or set `PIPELINE_WEBHOOK_URL`) |
+
+In Claude Code, the project skill `.claude/skills/run-gtm-campaign` runs this for you: ask it to "run the Q1 campaign from leads.csv" and it confirms the inputs, stays in draft, and never prints keys.
+
 ## Layout
 
 ```text
 src/gtm_engine/
-  contracts/   Pydantic JSON contracts (deliverability, warmup, readiness, leads, campaign)
+  contracts/   Pydantic JSON contracts (deliverability, warmup, readiness, leads, lead sources, campaign, pipeline)
   ports/       Protocol interfaces the core depends on
-  adapters/    Vendor/data-source implementations (DNS, warm-up, email verification, campaigns, webhook)
-  cli/         audit_domains, evaluate_warmup, check_readiness, verify_leads, provision_campaign
+  adapters/    Vendor/data-source implementations (lead sources, DNS, warm-up, email verification, campaigns, webhook)
+  cli/         run_pipeline (end to end), audit_domains, evaluate_warmup, check_readiness, verify_leads, provision_campaign
 fixtures/      Sample DNS, warm-up and lead data, plus sample Day 1 and Day 2 reports
 tests/         pytest suite (all network calls mocked)
+.claude/skills/ Claude Code project skill: run-gtm-campaign
 ```
 
 Other commands: `python -m gtm_engine.cli.audit_domains` (DNS gate only) and `python -m gtm_engine.cli.evaluate_warmup` (warm-up gate only, mock data).
