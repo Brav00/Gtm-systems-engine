@@ -2,6 +2,7 @@ import json
 import urllib.error
 import urllib.request
 from pydantic import BaseModel
+from gtm_engine.contracts.campaign import CampaignProvisioningReport
 from gtm_engine.contracts.leads import VerificationBatchReport
 from gtm_engine.contracts.readiness import ReadinessBatchReport
 
@@ -35,3 +36,6 @@ class HttpWebhookReadinessNotifier:
 
     def notify_verification(self, report: VerificationBatchReport) -> None:
         self.post_payload(report, label="verification")
+
+    def notify_campaign(self, report: CampaignProvisioningReport) -> None:
+        self.post_payload(report, label="campaign provisioning")

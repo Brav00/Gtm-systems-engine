@@ -161,15 +161,94 @@ flowchart TD
 
 Leads file format: a JSON list of objects with `email` (required) and optional `first_name`, `last_name`, `company_domain`.
 
+## Day 3: Programmatic campaign provisioning
+
+Turns the Day 1 and Day 2 reports into a Smartlead campaign: only healthy inboxes on ready domains are attached, only valid leads are uploaded, and the campaign stays drafted unless you pass `--activate`.
+
+```mermaid
+flowchart TD
+    subgraph INPUT["Inputs"]
+        D1["Day 1 readiness report<br/>ready_to_send · daily cap per domain"]
+        D2["Day 2 verification report<br/>status · name · company per lead"]
+        CFG["Campaign config<br/>--campaign-name or --campaign-id<br/>--mode mock or live · --activate"]
+    end
+
+    subgraph GUARD["Pre-flight safety guardrails · read-only, no changes yet"]
+        G1{"1 · Day 1 domains<br/>ready with daily cap above 0?"}
+        G2{"2 · Day 2 leads<br/>valid and deduplicated?"}
+        G3{"3 · live mode: Smartlead mailboxes on ready domains<br/>connected · ACTIVE · unblocked?"}
+        G4{"4 · live mode: reusing --campaign-id<br/>already active without --activate?"}
+    end
+
+    subgraph EXEC["Execution sequence · Smartlead client"]
+        E1["Create campaign · DRAFTED by default<br/>or reuse --campaign-id"]
+        E2["Attach healthy mailbox IDs"]
+        E3["Batch upload valid leads<br/>100 per chunk · block lists respected"]
+        E4{"--activate set?"}
+        DRAFT["Stay drafted or paused"]
+        START["Send START"]
+    end
+
+    subgraph OUT["Outputs"]
+        REP["CampaignProvisioningReport JSON"]
+        HOOK["Outbound webhook<br/>Slack · n8n · Clay"]
+        EXIT["Exit codes<br/>0 provisioned · 1 guardrail blocked · 2 error"]
+    end
+
+    BLOCK["⛔ Guardrail blocked<br/>no campaign changes · exit 1"]
+
+    D1 --> G1
+    D2 --> G2
+    CFG --> G4
+    G1 -->|"none ready"| BLOCK
+    G1 -->|"yes"| G2
+    G2 -->|"no valid leads"| BLOCK
+    G2 -->|"yes"| G3
+    G3 -->|"no healthy mailboxes"| BLOCK
+    G3 -->|"yes"| G4
+    G4 -->|"yes: would start sending"| BLOCK
+    G4 -->|"no, or new campaign"| E1
+    E1 --> E2
+    E2 --> E3
+    E3 --> E4
+    E4 -->|"no, default"| DRAFT
+    E4 -->|"yes"| START
+    DRAFT --> REP
+    START --> REP
+    REP --> HOOK
+    REP --> EXIT
+```
+
+| Area | Rule |
+|---|---|
+| **Domains** | Only Day 1 domains with `ready_to_send: true` and a daily cap above 0; the rest are listed in `excluded_domains` |
+| **Inboxes** | Only Smartlead accounts on those domains with SMTP connected, warm-up `ACTIVE` and not blocked |
+| **Leads** | Only Day 2 results with `status: valid`; risky, invalid, unknown and duplicate emails are skipped and counted |
+| **Guardrails** | `no_ready_domains_available`, `no_valid_leads_to_upload`, `no_healthy_mailboxes_on_ready_domains` and `campaign_already_active` stop the run before any write, with exit `1` |
+| **Existing campaign** | `--campaign-id` reuses it; if it is already `ACTIVE`, provisioning needs `--activate` so leads never start sending by surprise |
+| **Activation** | Off by default: new campaigns stay `DRAFTED`; `--activate` sends `START` as the last step |
+| **Capacity** | `total_daily_capacity` is the sum of Day 1 daily caps for the domains that got inboxes attached |
+| **Partial failure** | If a write fails after the campaign exists, the error names the campaign ID and how many leads were uploaded |
+
+| Run | Command |
+|---|---|
+| **Sample data** | `python -m gtm_engine.cli.provision_campaign --campaign-name "Q1 Outbound" --readiness-report fixtures/sample_readiness_report.json --verification-report fixtures/sample_verification_report.json` |
+| **Live, stays drafted** | `SMARTLEAD_API_KEY=… python -m gtm_engine.cli.provision_campaign --mode live --campaign-name "Q1 Outbound" --readiness-report readiness.json --verification-report verification.json` |
+| **Live, start sending** | Add `--activate` |
+| **Add to an existing campaign** | Add `--campaign-id <id>` |
+| **Send to a webhook** | Add `--webhook-url <url>` (or set `CAMPAIGN_WEBHOOK_URL`) |
+
+Create the input reports with `check_readiness … > readiness.json` (Day 1) and `verify_leads … > verification.json` (Day 2).
+
 ## Layout
 
 ```text
 src/gtm_engine/
-  contracts/   Pydantic JSON contracts (deliverability, warmup, readiness, leads)
+  contracts/   Pydantic JSON contracts (deliverability, warmup, readiness, leads, campaign)
   ports/       Protocol interfaces the core depends on
-  adapters/    Vendor/data-source implementations (DNS, warm-up, email verification, webhook)
-  cli/         audit_domains, evaluate_warmup, check_readiness, verify_leads
-fixtures/      Sample DNS, warm-up and lead data for mock mode
+  adapters/    Vendor/data-source implementations (DNS, warm-up, email verification, campaigns, webhook)
+  cli/         audit_domains, evaluate_warmup, check_readiness, verify_leads, provision_campaign
+fixtures/      Sample DNS, warm-up and lead data, plus sample Day 1 and Day 2 reports
 tests/         pytest suite (all network calls mocked)
 ```
 
