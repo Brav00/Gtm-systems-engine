@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from gtm_engine.contracts.campaign import CampaignProvisioningReport
 from gtm_engine.contracts.leads import VerificationBatchReport
 from gtm_engine.contracts.readiness import ReadinessBatchReport
+from gtm_engine.contracts.signals import SignalBatchReport
 
 
 class HttpWebhookReadinessNotifier:
@@ -39,3 +40,6 @@ class HttpWebhookReadinessNotifier:
 
     def notify_campaign(self, report: CampaignProvisioningReport) -> None:
         self.post_payload(report, label="campaign provisioning")
+
+    def notify_signals(self, report: SignalBatchReport) -> None:
+        self.post_payload(report, label="intent signals")
