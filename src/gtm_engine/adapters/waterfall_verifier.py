@@ -101,5 +101,7 @@ def with_lead_context(result: LeadVerificationResult, lead: LeadInput) -> LeadVe
             "first_name": lead.first_name,
             "last_name": lead.last_name,
             "company_domain": lead.company_domain,
+            "company_name": lead.company_name,
+            "signal_hook": lead.signal_hook,
         }
     )

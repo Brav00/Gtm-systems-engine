@@ -28,13 +28,17 @@ def _is_healthy_mailbox(account: dict) -> bool:
     )
 
 
-def _lead_payload(lead: LeadVerificationResult) -> dict[str, str]:
-    payload = {
+def _lead_payload(lead: LeadVerificationResult) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "email": lead.email,
         "first_name": lead.first_name,
         "last_name": lead.last_name,
+        "company_name": lead.company_name,
         "website": lead.company_domain,
     }
+    if lead.signal_hook:
+        # Available in Smartlead sequences as {{signal_hook}}.
+        payload["custom_fields"] = {"signal_hook": lead.signal_hook}
     return {k: v for k, v in payload.items() if v}
 
 

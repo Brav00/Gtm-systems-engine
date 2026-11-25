@@ -1,5 +1,6 @@
 from gtm_engine.contracts.campaign import CampaignProvisioningReport
 from gtm_engine.contracts.leads import VerificationBatchReport
+from gtm_engine.contracts.pipeline import PipelineRunSummary
 from gtm_engine.contracts.readiness import ReadinessBatchReport
 from gtm_engine.contracts.signals import SignalBatchReport
 
@@ -15,4 +16,7 @@ class NoopReadinessNotifier:
         return None
 
     def notify_signals(self, report: SignalBatchReport) -> None:
+        return None
+
+    def notify_pipeline(self, summary: PipelineRunSummary) -> None:
         return None
